@@ -93,11 +93,18 @@ def extract_state(lines):
 
     s["last_quota_reset"] = grab(r"上次额度重置\s*\n\s*(\d+\s*月\s*\d+\s*日)")
 
+    # 顶部状态行：以“等待”开头且含“生效”（如“等待额度重置生效”）
     pending = None
     for l in lines:
-        if "等待生效" in l:
+        if l.startswith("等待") and "生效" in l:
             pending = l
             break
+    # 兜底：含“等待生效”，但排除日历统计（含“次”）与详情标题（含“·”）
+    if not pending:
+        for l in lines:
+            if "等待生效" in l and "次" not in l and "·" not in l:
+                pending = l
+                break
     s["pending_line"] = pending
 
     last_card = None
@@ -109,12 +116,24 @@ def extract_state(lines):
 
     banner = None
     for l in lines:
-        if ("正在发放" in l or "正在加载" in l or "正在进行" in l) and len(l) <= 40:
+        if ("正在发放" in l or "正在加载" in l or "正在进行" in l or "正处在" in l) and len(l) <= 40:
             banner = l
             break
     s["banner_line"] = banner
 
-    s["estimate_lines"] = [l for l in lines if l.startswith("预计")]
+    # 预计时间：“预计”常单独成行，时间窗在紧随其后的一行；合并并去重
+    estimate_lines = []
+    seen_est = set()
+    for i, l in enumerate(lines):
+        if l.startswith("预计"):
+            txt = l.strip()
+            if txt == "预计" and i + 1 < len(lines):
+                txt = "预计 " + lines[i + 1].strip()
+            key = re.sub(r"\s+", "", txt)
+            if key not in seen_est:
+                seen_est.add(key)
+                estimate_lines.append(txt)
+    s["estimate_lines"] = estimate_lines
 
     # Tibo 发帖时间（X 平台格式 M/D HH:MM，北京时间）
     time_re = r"\d{1,2}/\d{1,2}\s+\d{1,2}:\d{2}"
@@ -224,7 +243,9 @@ def build_mail_html(events, new):
         tibo_parts.append("Tibo 确认帖时间：%s（北京时间；确认帖时间不代表精确到账时间）" % ct)
     if earliest:
         tibo_parts.append("最早相关帖时间：%s（北京时间）" % earliest)
-    if not tibo_parts and pts:
+    if not ct and pts:
+        tibo_parts.append("Tibo 预告帖时间：%s（北京时间；当前为已宣布、等待生效，尚未确认到账）" % "、".join(pts))
+    elif not tibo_parts and pts:
         tibo_parts.append("Tibo 发帖时间：%s（北京时间）" % "、".join(pts))
     if not tibo_parts:
         tibo_parts.append("Tibo 发帖时间：页面未显示")
